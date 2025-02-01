@@ -1,0 +1,39 @@
+Step 1: Install NFS Server on Master Node
+    1. Install NFS server:
+        sudo dnf install nfs-utils -y
+
+    2. Start and enable NFS service:
+        sudo systemctl start nfs-server
+        sudo systemctl enable nfs-server
+
+    3. Create the shared directory:
+        sudo mkdir -p /mnt/airflow/dags
+        sudo chown -R airflow:airflow /mnt/airflow/dags
+
+    4. Configure NFS exports:
+        sudo nano /etc/exports
+        /mnt/airflow/dags 192.168.30.121/24(rw,sync,no_subtree_check)
+
+    5. Export the shared directory:
+        sudo exportfs -r
+
+    6. Allow NFS traffic through the firewall:
+        sudo firewall-cmd --permanent --add-service=nfs
+        sudo firewall-cmd --reload
+
+Step 2: Mount the Shared Directory on Worker Nodes
+    1. Install NFS client on each worker node:
+        sudo dnf install nfs-utils -y
+    
+    2. Create a directory to mount the shared NFS location:
+        sudo mkdir -p /mnt/airflow/dags
+
+    3. Mount the NFS share: Replace master_ip with the actual IP of the master node.
+        sudo mount master_ip:/mnt/airflow/dags /mnt/airflow/dags
+
+    4. Make the mount permanent (so it persists across reboots): Edit the /etc/fstab file:
+        sudo nano /etc/fstab
+        master_ip:/mnt/airflow/dags /mnt/airflow/dags nfs defaults 0 0
+
+    5. Test the mount: Ensure the mount is working by checking the contents:
+        ls /mnt/airflow/dags        
