@@ -5,6 +5,7 @@ I want to use mysql as database for it.
 create an airflow user on each node:
 useradd -m airflow
 passwd airflow
+usermod -aG wheel airflow
 
 
 1. Install Required Packages on All Nodes

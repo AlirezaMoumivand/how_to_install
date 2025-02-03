@@ -1,0 +1,90 @@
+1. Create clickhouse user to each node:
+    sudo useradd -m clickhouse
+    sudo passwd clickhouse
+    sudo usermod -aG wheel clickhouse  # If administrative privileges are needed
+
+2. Add ssh key for each node and copy it each node in order to ssh passwordless
+    ssh-keygen -b 4096
+    ssh-copy-id -i /home/clickhouse/.ssh/id_rsa.pub clickhouse@master
+    .
+    .
+    .
+
+3. Add the ClickHouse Repository on each node:
+    sudo yum install -y epel-release
+    sudo yum install -y https://packages.clickhouse.com/rpm/clickhouse.repo
+    sudo rpm -ivh ./clickhouse-client-22.6.6.16.x86_64.rpm
+    sudo rpm -ivh ./clickhouse-common-static-22.6.6.16.x86_64.rpm
+    sudo rpm -ivh ./clickhouse-server-22.6.6.16.x86_64.rpm
+    sudo systemctl enable --now clickhouse-server
+    sudo systemctl status clickhouse-server
+
+2. Configure ClickHouse for a Clustered Setup
+    Step 1: Edit the Cluster Configuration on All Nodes
+        sudo nano /etc/clickhouse-server/config.xml
+        change remote server part as below:
+            <remote_servers>
+                <clickhouse_cluster>
+                    <shard>
+                        <replica>
+                            <host>master</host>
+                            <port>9000</port>
+                            <user>default</user>
+                            <password>P@ssw0rdClickhouse</password>
+                        </replica>
+                    </shard>
+                    <shard>
+                        <replica>
+                            <host>node1</host>
+                            <port>9000</port>
+                            <user>default</user>
+                            <password>P@ssw0rdClickhouse</password>
+                        </replica>
+                        <replica>
+                            <host>node2</host>
+                            <port>9000</port>
+                            <user>default</user>
+                            <password>P@ssw0rdClickhouse</password>
+                        </replica>
+                    </shard>
+                    <shard>
+                        <replica>
+                            <host>node3</host>
+                            <port>9000</port>
+                            <user>default</user>
+                            <password>P@ssw0rdClickhouse</password>
+                        </replica>
+                        <replica>
+                            <host>node4</host>
+                            <port>9000</port>
+                            <user>default</user>
+                            <password>P@ssw0rdClickhouse</password>
+                        </replica>
+                    </shard>
+                </clickhouse_cluster>
+            </remote_servers>
+    Step 2: Configure Password Authentication (Optional)
+        sudo nano /etc/clickhouse-server/users.xml
+        change user part as below:
+            <users>
+                <default>
+                    <password>your_secure_password</password>
+                    <networks>
+                        <ip>::/0</ip>  <!-- Allow all IPs -->
+                    </networks>
+                </default>
+            </users>
+    Step 3: Restart ClickHouse
+        sudo systemctl restart clickhouse-server
+3. Create a Distributed Table
+    clickhouse-client -u default --password
+    Step 1: Create a Database
+        CREATE DATABASE mydb ON CLUSTER clickhouse_cluster;
+    Step 2: Create a Table on Each Node
+        CREATE TABLE mydb.data_local ON CLUSTER clickhouse_cluster (
+            id UInt32,
+            name String
+        ) ENGINE = MergeTree()
+        ORDER BY id;
+    Step 3: Create a Distributed Table Run this on any node:
+        CREATE TABLE mydb.data_distributed ON CLUSTER clickhouse_cluster AS mydb.data_local ENGINE = Distributed(clickhouse_cluster, mydb, data_local, rand());
