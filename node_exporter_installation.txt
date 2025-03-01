@@ -1,0 +1,49 @@
+You should do it on each node you want to monitor it.
+
+Step 1: Create the Node Exporter User
+    sudo useradd -m node_exporter
+    sudo passwd node_exporter
+
+Step 2: Download Node Exporter
+    cd /opt
+    wget https://github.com/prometheus/node_exporter/releases/download/v1.9.0/node_exporter-1.9.0.linux-amd64.tar.gz
+    tar xvf node_exporter-1.9.0.linux-amd64.tar.gz
+    mv node_exporter-1.9.0.linux-amd64 node_exporter
+    chown -R node_exporter:node_exporter ./node_exporter
+
+Step 3: Create a Systemd Service File
+    sudo tee /etc/systemd/system/node_exporter.service > /dev/null <<EOF
+        [Unit]
+        Description=Node Exporter
+        After=network.target
+
+        [Service]
+        User=node_exporter
+        Group=node_exporter
+        Type=simple
+        Restart=always
+        ExecStart=/opt/node_exporter/node_exporter --web.listen-address=:9100
+
+        [Install]
+        WantedBy=multi-user.target
+        EOF
+
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now node_exporter
+    sudo systemctl status node_exporter
+        If status is failed:
+            If SELinux is enabled, it might be blocking execution. Test by temporarily disabling it:
+                sudo setenforce 0
+                sudo systemctl restart prometheus
+            If Node Exporter starts, create a permanent SELinux policy:
+                sudo chcon -t bin_t /opt/node_exporter/node_exporter
+            Re-enable SELinux:
+                sudo setenforce 1
+    sudo systemctl restart node_exporter
+
+Step 6: Verify Installation
+    systemctl status node_exporter
+    curl http://localhost:9100
+    To allow external access, configure firewall:
+        sudo firewall-cmd --add-port=9100/tcp --permanent
+        sudo firewall-cmd --reload
