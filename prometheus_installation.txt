@@ -1,0 +1,53 @@
+Step 1: Create the Prometheus User
+    sudo useradd -m prometheus
+    sudo passwd prometheus
+
+Step 2: Download Prometheus
+    cd /opt
+    wget https://github.com/prometheus/prometheus/releases/download/v2.53.3/prometheus-2.53.3.linux-amd64.tar.gz
+    tar xvf prometheus-2.53.3.linux-amd64.tar.gz
+    mv prometheus-2.53.3.linux-amd64 prometheus
+    mkdir prometheus/data
+    chown -R prometheus:prometheus ./prometheus
+
+Step 3: Create a Systemd Service File
+    sudo tee /etc/systemd/system/prometheus.service > /dev/null <<EOF
+        [Unit]
+        Description=Prometheus
+        Wants=network-online.target
+        After=network-online.target
+
+        [Service]
+        User=prometheus
+        Group=prometheus
+        WorkingDirectory=/home/prometheus
+        ExecStart=/opt/prometheus/prometheus \\
+        --config.file=/opt/prometheus/prometheus.yml \\
+        --storage.tsdb.path=/opt/prometheus/data \\
+        --web.console.templates=/home/prometheus/prometheus-2.53.3.linux-amd64/console \\
+        --web.console.libraries=/home/prometheus/prometheus-2.53.3.linux-amd64/console_libraries
+        Restart=always
+
+        [Install]
+        WantedBy=multi-user.target
+        EOF
+
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now prometheus
+    sudo systemctl status prometheus
+        If status is failed:
+            If SELinux is enabled, it might be blocking execution. Test by temporarily disabling it:
+                sudo setenforce 0
+                sudo systemctl restart prometheus
+            If Node Exporter starts, create a permanent SELinux policy:
+                sudo chcon -t bin_t /opt/prometheus/prometheus
+            Re-enable SELinux:
+                sudo setenforce 1
+    sudo systemctl restart prometheus
+
+Step 6: Verify Installation
+    systemctl status prometheus
+    curl http://localhost:9090
+    To allow external access, configure firewall:
+        sudo firewall-cmd --add-port=9090/tcp --permanent
+        sudo firewall-cmd --reload
