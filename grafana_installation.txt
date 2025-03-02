@@ -1,0 +1,48 @@
+You need to this instruction on one node (preferably master).
+
+Step 1: Create the Grafana User
+    sudo useradd -m grafana
+    sudo passwd grafana
+
+Step 2: Download Grafana
+    cd /opt
+    wget wget https://dl.grafana.com/enterprise/release/grafana-enterprise-11.5.2.linux-amd64.tar.gz
+    tar xvf grafana-enterprise-11.5.2.linux-amd64.tar.gz
+    mv grafana-enterprise-11.5.2.linux-amd64 grafana
+    chown -R grafana:grafana ./grafana
+
+Step 3: Create a Systemd Service File
+    sudo tee /etc/systemd/system/grafana.service <<EOF
+        [Unit]
+        Description=Grafana
+        After=network.target
+
+        [Service]
+        Type=simple
+        ExecStart=/opt/grafana/bin/grafana server --homepath=/opt/grafana --config /opt/grafana/conf/defaults.ini
+        Restart=always
+        #User=root
+
+        [Install]
+        WantedBy=multi-user.target
+        EOF
+
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now grafana
+    sudo systemctl status grafana
+        If status is failed:
+            If SELinux is enabled, it might be blocking execution. Test by temporarily disabling it:
+                sudo setenforce 0
+                sudo systemctl restart grafana
+            If Node Exporter starts, create a permanent SELinux policy:
+                sudo chcon -t bin_t /opt/grafana/bin/grafana
+            Re-enable SELinux:
+                sudo setenforce 1
+    sudo systemctl restart grafana
+
+Step 6: Verify Installation
+    systemctl status grafana
+    curl http://localhost:3000
+    To allow external access, configure firewall:
+        sudo firewall-cmd --add-port=9090/tcp --permanent
+        sudo firewall-cmd --reload
