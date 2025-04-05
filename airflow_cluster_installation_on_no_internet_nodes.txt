@@ -1,0 +1,51 @@
+Installation airflow with celery and MySQL Rocky linux nodes which doesn't have access to internet.
+
+1. Prerequisites
+    Ensure all nodes:
+        - Are running Rocky Linux (same version).
+        - Have Python 3.7+ installed (recommended: 3.8 or 3.9).
+        - Have the same OS architecture (you mentioned armv7l before).
+        - You are using the same Python environment (e.g., a virtualenv or conda).
+        - Have MySQL server installed and accessible to the Airflow nodes (likely on your master node.
+
+2. On an Internet-connected machine
+    Step 2.1: Create a virtual environment
+        python3 -m venv airflow_env
+        source airflow_env/bin/activate
+    Step 2.2: Install Airflow with constraints
+        Pick Airflow version and matching constraints from https://airflow.apache.org/docs/apache-airflow/stable/installation/index.html. For example, for Airflow 2.8.1:
+            AIRFLOW_VERSION=2.8.1
+            PYTHON_VERSION="$(python --version | cut -d " " -f 2 | cut -d "." -f 1-2)"
+            CONSTRAINT_URL="https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt"
+        Then install Airflow with Celery and MySQL:
+            pip install "apache-airflow[celery,mysql]==${AIRFLOW_VERSION}" --constraint "${CONSTRAINT_URL}"
+                * This pulls in:
+                    Airflow core
+                    Celery executor dependencies
+                    MySQL client library
+                    All Python packages listed in the constraints
+    Step 2.3: Download all packages for offline install:
+        Make a directory and download all pip packages:
+            mkdir airflow_packages
+            pip download "apache-airflow[celery,mysql]==${AIRFLOW_VERSION}" --constraint "${CONSTRAINT_URL}" -d airflow_packages
+        Optional: Include other tools:
+            Add extra packages like mysqlclient or psycopg2 (depending on your MySQL client):
+                pip download mysqlclient -d airflow_packages
+
+3. Transfer packages to your nodes:
+    Use scp, rsync, or USB to copy the airflow_packages/ directory to each node. Example:
+        scp -r airflow_packages/ airflow_user@node1:/home/airflow_user/
+
+4. On each Rocky Linux node:
+    Step 4.1: Set up Python environment
+        python3 -m venv airflow_env
+        source airflow_env/bin/activate
+    Step 4.2: Install from offline packages:
+        pip install --no-index --find-links=/path/to/airflow_packages apache-airflow[celery,mysql]==2.8.1
+            * Make sure to install all nodes the same way (especially celery workers and scheduler).
+
+5. Configure Airflow (next step):
+    Once installed, you'll set up:
+        - airflow.cfg (for Celery, MySQL connection)
+        - Celery broker (e.g., Redis or RabbitMQ)
+        - Initialize DB with airflow db init
