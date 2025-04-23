@@ -1,0 +1,99 @@
+Prerequisites:
+    * GitLab is installed and running locally or in a private network.
+    * Your project (NAME_OF_PROJECT) is pushed to a GitLab repository.
+    * The destination server (NAME_OF_HOST_SERVER) is reachable over SSH from the GitLab Runner machine.
+
+1. Install GitLab Runner (Offline System):
+    a. Download GitLab Runner Binary on a Machine with Internet:
+        * Go to: https://gitlab-runner-downloads.s3.amazonaws.com/latest/index.html
+        * Choose the binary for your architecture (e.g., linux-amd64) and download it.
+        * Example:
+            - wget https://gitlab-runner-downloads.s3.amazonaws.com/latest/binaries/gitlab-runner-linux-amd64 -O gitlab-runner
+            - chmod +x gitlab-runner
+    b. Transfer to Offline Server:
+        - scp gitlab-runner youruser@offline-server:/usr/local/bin/
+        * Or use a USB if needed. Then on the offline server:
+            - sudo mv gitlab-runner /usr/local/bin/
+            - sudo chmod +x /usr/local/bin/gitlab-runner
+
+2. Create GitLab Runner User (if not exists):
+    - sudo useradd --comment 'GitLab Runner' --create-home gitlab-runner --shell /bin/bash
+
+3. Install GitLab Runner as a Service:
+    - sudo gitlab-runner install --user=gitlab-runner --working-directory=/home/gitlab-runner
+    - sudo gitlab-runner start
+
+4. Register the GitLab Runner:
+    * On the runner server:
+        - sudo gitlab-runner register
+        * You will be prompted for:
+            Prompt	                    What to Enter
+            GitLab instance URL	        http://<your-gitlab-url>/
+            Registration token	        Found in your GitLab UI → Settings → CI/CD → Runners
+            Description	                e.g., etl-runner
+            Tags	                    Optional, e.g., offline
+            Executor	                Use shell if no Docker is installed
+            Default image (if asked)	Skip if using shell executor
+
+5. Set Up SSH from Runner to Production Server:
+    * From the runner host:
+        - sudo -u gitlab-runner ssh-keygen -t rsa -b 4096 -C "ci@runner" -N "" -f /home/gitlab-runner/.ssh/id_rsa
+    * Copy the public key to NAME_OF_THE_HOST_SERVER:
+        - sudo -u gitlab-runner ssh-copy-id -i /home/gitlab-runner/.ssh/id_rsa.pub produser@NAME_OF_THE_HOST_SERVER
+    * Test it:
+        - sudo -u gitlab-runner ssh produser@NAME_OF_THE_HOST_SERVER 'echo Connected successfully'
+
+6. Create .gitlab-ci.yml in Your Project:
+    * In your GitLab repo root, create:
+        stages:
+            - package
+            - deploy
+        variables:
+            BASE_JOBS_ZIP: "base_jobs.zip"
+            JOBS_ZIP: "jobs.zip"
+            TARGET_USER: "NAME_OF_THE_USER"
+            TARGET_HOST: "NAME_OF_THE_HOST_SERVER"
+            TARGET_DIR: "/home/hadoop/temp/"
+        package_jobs:
+            stage: package
+            script:
+                - zip -r "$BASE_JOBS_ZIP" base_jobs/
+                - zip -r "$JOBS_ZIP" jobs/
+            artifacts:
+                paths:
+                    - $BASE_JOBS_ZIP
+                    - $JOBS_ZIP
+            only:
+                - master
+            tags:
+                - gitlab_runner_tags # If exists
+        deploy_to_prod:
+            stage: deploy
+            script:
+                - echo "$SSH_PRIVATE_KEY" > id_rsa
+                - chmod 600 id_rsa
+                - export SSH_OPTS="-o StrictHostKeyChecking=no -i id_rsa"
+
+                 # Find remote dirs and copy zips to each one
+                - |
+                ssh $SSH_OPTS $TARGET_USER@$TARGET_HOST "find $TARGET_DIR -maxdepth 1 -type d -name 'app-*'" | while read dir; do
+                    scp $SSH_OPTS $BASE_JOBS_ZIP $JOBS_ZIP $TARGET_USER@$TARGET_HOST:"$dir/"
+                done
+            only:
+                - master
+            tags:
+                - gitlab_runner_tags # If exists
+
+7. Commit and Push to GitLab:
+    - git add .gitlab-ci.yml
+    - git commit -m "Add CI/CD pipeline for auto deployment"
+    - git push origin main
+
+    * Now each commit to main will:
+        * Zip the base_jobs and jobs directories
+        * Copy the zipped files to NAME_OF_THE_HOST_SERVER:/home/hadoop/temp/
+        * Remove the previous zip files before replacing
+
+8. Monitor Pipeline
+    * Go to GitLab Project → CI/CD → Pipelines
+    * View pipeline progress and logs
