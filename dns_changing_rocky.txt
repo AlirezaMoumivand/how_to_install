@@ -1,0 +1,30 @@
+Changing DNS:
+    1. List available connections to find your active connection name:
+        - nmcli con show
+
+    2. Modify the DNS settings (replace <connection-name> with the actual name like eth0, ens33, or Wired connection 1):
+        - nmcli con mod "<connection-name>" ipv4.dns "178.22.122.100 185.51.200.2" # shecan DNS
+        - nmcli con mod "<connection-name>" ipv4.ignore-auto-dns yes
+
+    3. Restart the connection to apply changes:
+        - nmcli con down "<connection-name>" && nmcli con up "<connection-name>"
+
+    4. After reconnecting, confirm with:
+        - nmcli dev show | grep DNS
+        or:
+        - cat /etc/resolv.conf
+
+Rolling Back:
+    1. Re-enable automatic DNS from DHCP:
+        - nmcli con mod "<connection-name>" ipv4.ignore-auto-dns no
+
+    2. Clear any manually set DNS values:
+        - nmcli con mod "<connection-name>" ipv4.dns ""
+
+    3. Restart the connection to apply changes:
+        - nmcli con down "<connection-name>" && nmcli con up "<connection-name>"
+
+    4. Check that DNS is now coming from DHCP:
+        - nmcli dev show | grep DNS
+        or:
+        - cat /etc/resolv.conf
