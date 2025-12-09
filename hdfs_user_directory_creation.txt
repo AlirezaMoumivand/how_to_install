@@ -1,0 +1,46 @@
+What does this permission means: "drwxrwx---+" ?
+    1. The Breakdown
+        - d (Directory): The very first letter tells you this is a folder, not a file.
+        - rwx (Owner): The user who owns this folder has Read, Write, and Execute permissions. 
+            They can do anything: enter, list files, and delete/add files.
+        - rwx (Group): Anyone in the assigned group also has full access (Read, Write, Execute).
+        - --- (Others): Everyone else (users who are not the owner and not in the group) has no access at all.
+            They cannot even enter the folder.
+
+    2. The Special Symbol (+)
+        The + at the very end means there is an Access Control List (ACL) attached to this directory.
+        What it means: The standard permissions (owner/group/others) are not the whole story. 
+                        There are extra rules hidden in the background. 
+                        For example, a specific user (like spark_user) might have been given special access, \
+                            even if they aren't the owner or in the group.
+
+    3. How to see the hidden rules
+        Since the + tells you there is more info, you need a specific command to see those extra details. 
+        You can use getfacl:
+            - hdfs dfs -getfacl /path/to/directory
+        This will list out all the specific users and permissions hidden behind that +.
+
+
+HDFS /user directory have this permission. I want to add a /airflow directory inside /user directory that airflow user \
+can do everything in it.
+    Because your /user directory has permissions set to --- for "Others" (the last three dashes in drwxrwx---+), \
+    the airflow user will get a "Permission Denied" error just trying to reach /user/airflow, even if they own the folder inside!
+    Think of /user as the main building entrance. If airflow doesn't have a key to the building (/user), they can't get to their \
+    office (/user/airflow).
+    Here is the clean, soft solution to fix this using ACLs.
+    1. Create the folder and set ownership
+        As the superuser (hdfs), create the folder and give it to airflow.
+            - sudo -u hdfs hdfs dfs -mkdir /user/airflow
+            - sudo -u hdfs hdfs dfs -chown airflow:airflow /user/airflow
+    2. The Critical Step: Allow "Traversal"
+        Now, we must give the airflow user permission to pass through the /user directory without giving them permission to read \
+        everyone else's data.
+        We use setfacl to add a specific rule just for airflow on the /user folder. We give them --x (Execute only), which allows \
+        them to "enter" the directory but not "list" it.
+            - sudo -u hdfs hdfs dfs -setfacl -m user:airflow:--x /user
+    3. Set permissions inside the new folder
+        Now that airflow can get inside, make sure they have full control over their own directory.
+            - sudo -u hdfs hdfs dfs -chmod 700 /user/airflow
+        700 means:
+            Airflow: Can do everything (Read, Write, Execute).
+            Everyone else: Cannot see or touch anything inside.
