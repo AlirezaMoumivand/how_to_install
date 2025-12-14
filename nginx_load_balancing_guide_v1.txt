@@ -1,0 +1,78 @@
+Nginx Load Balancing Guide
+
+Set up a Weighted Load Balancer using Nginx on an Ubuntu node to distribute traffic to three Rocky Linux application nodes.
+
+Infrastructure Overview
+Node Name        OS         Role                HypotheticalIP      Weight
+nginx@mainserver Ubuntu     Load Balancer       192.168.1.5         N/A
+rockymaster      Rocky      LinuxBackend App    192.168.1.10        20%
+rockynode1       Rocky      LinuxBackend App    192.168.1.11        40%
+rockynode2       Rocky      LinuxBackend App    192.168.1.12        40%
+
+Phase 1: Prepare the Backend Nodes
+    Perform these steps on rockymaster, rockynode1, and rockynode2.
+    1. Create the Sample Application
+        We create a unique HTML file so we can identify which server is replying.
+            On rockymaster:
+                - mkdir ~/simple-app && cd ~/simple-app
+                - echo "Hello from ROCKYMASTER!" > index.html
+            On rockynode1:
+                - mkdir ~/simple-app && cd ~/simple-app
+                - echo "Hello from ROCKYNODE 1!" > index.html
+            On rockynode2:
+                - mkdir ~/simple-app && cd ~/simple-app
+                - echo "Hello from ROCKYNODE 2!" > index.html
+    
+    2. Configure the Firewall
+        Rocky Linux blocks ports by default. We must allow traffic on port 8080.
+            - sudo firewall-cmd --add-port=8080/tcp --permanent
+            - sudo firewall-cmd --reload
+    
+    3. Start the Application (Background Mode)
+        We use nohup so the app keeps running even if you close the terminal.
+            - cd ~/simple-app
+            - nohup python3 -m http.server 8080 &
+    
+Phase 2: Configure the Load Balancer
+    Perform these steps on the nginx@mainserver node.
+    1. Install Nginx
+        - sudo apt update
+        - sudo apt install nginx -y
+
+    2. Create the Configuration File
+        We will create a new file specifically for this setup.
+            - sudo nano /etc/nginx/conf.d/load-balancer.conf
+    
+        Paste the following configuration: We use a 1:2:2 ratio to achieve the 20% / 40% / 40% split you requested.
+            upstream my_app_servers {
+                # rockymaster gets weight 1 (approx 20%)
+                server 192.168.1.10:8080 weight=1;
+                
+                # nodes get weight 2 (approx 40% each)
+                server 192.168.1.11:8080 weight=2;
+                server 192.168.1.12:8080 weight=2;
+            }
+
+            server {
+                listen 80;
+
+                location / {
+                    proxy_pass http://my_app_servers;
+                    
+                    # Ensures the browser doesn't "stick" to one server during testing
+                    proxy_set_header Connection "close";
+                }
+            }
+    
+    3. Apply Changes
+        First, remove the default Nginx config to avoid conflicts, then restart.
+            - sudo rm /etc/nginx/sites-enabled/default  # Only if it exists
+            - sudo systemctl restart nginx
+
+Phase 3: Verification
+    To verify the weighted distribution, it is best to use curl from the mainserver terminal, as web browsers often cache connections.
+    Run this loop command:
+        - for i in {1..10}; do curl http://localhost; echo; done
+    Expected Output: You should see ROCKYMASTER appear roughly 2 times, and the ROCKYNODE messages appear roughly 8 times combined.
+
+    
