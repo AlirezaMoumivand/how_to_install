@@ -1,0 +1,296 @@
+Nginx Load Balancing Guide
+
+Set up a Weighted Load Balancer using Nginx on an Ubuntu node to distribute traffic to \
+three Rocky Linux application nodes.
+
+Infrastructure Overview
+-----------------------------------------------------------------------------------
+| Node Name        | OS        | Role               | HypotheticalIP     | Weight |
+-----------------------------------------------------------------------------------
+| nginx@mainserver | Ubuntu    | Load Balancer      | 192.168.1.5        | N/A    |
+| rockymaster      | Rocky     | LinuxBackend App   | 192.168.1.10       | 20%    |
+| rockynode1       | Rocky     | LinuxBackend App   | 192.168.1.11       | 40%    |
+| rockynode2       | Rocky     | LinuxBackend App   | 192.168.1.12       | 40%    |
+-----------------------------------------------------------------------------------
+
+Phase 1: Prepare the Backend Nodes
+    Perform these steps on rockymaster, rockynode1, and rockynode2.
+    1. Create the Sample Application
+        We create a unique HTML file so we can identify which server is replying.
+            On rockymaster:
+                - mkdir ~/simple-app && cd ~/simple-app
+                - echo "Hello from ROCKYMASTER!" > index.html
+            On rockynode1:
+                - mkdir ~/simple-app && cd ~/simple-app
+                - echo "Hello from ROCKYNODE 1!" > index.html
+            On rockynode2:
+                - mkdir ~/simple-app && cd ~/simple-app
+                - echo "Hello from ROCKYNODE 2!" > index.html
+    
+    2. Configure the Firewall
+        Rocky Linux blocks ports by default. We must allow traffic on port 8080.
+            - sudo firewall-cmd --add-port=8080/tcp --permanent
+            - sudo firewall-cmd --reload
+    
+    3. Start the Application (Background Mode)
+        We use nohup so the app keeps running even if you close the terminal.
+            - cd ~/simple-app
+            - nohup python3 -m http.server 8080 &
+    
+Phase 2: Configure the Load Balancer
+    Perform these steps on the nginx@mainserver node.
+    1. Install Nginx
+        - sudo apt update
+        - sudo apt install nginx -y
+
+    2. Create the Configuration File
+        We will create a new file specifically for this setup.
+            - sudo nano /etc/nginx/conf.d/load-balancer.conf
+    
+        Paste the following configuration: We use a 1:2:2 ratio to achieve the 20% / 40% / 40% \
+        split you requested.
+            upstream my_app_servers {
+                # rockymaster gets weight 1 (approx 20%)
+                server 192.168.1.10:8080 weight=1;
+                
+                # nodes get weight 2 (approx 40% each)
+                server 192.168.1.11:8080 weight=2;
+                server 192.168.1.12:8080 weight=2;
+            }
+
+            server {
+                listen 80;
+
+                location / {
+                    proxy_pass http://my_app_servers;
+                    
+                    # Ensures the browser doesn't "stick" to one server during testing
+                    proxy_set_header Connection "close";
+                }
+            }
+    
+    3. Apply Changes
+        First, remove the default Nginx config to avoid conflicts, then restart.
+            - sudo rm /etc/nginx/sites-enabled/default  # Only if it exists
+            - sudo systemctl restart nginx
+
+Phase 3: Verification
+    To verify the weighted distribution, it is best to use curl from the mainserver terminal, \
+    as web browsers often cache connections.
+    Run this loop command:
+        - for i in {1..10}; do curl http://localhost; echo; done
+    Expected Output: You should see ROCKYMASTER appear roughly 2 times, and the ROCKYNODE messages \
+    appear roughly 8 times combined.
+
+
+-----------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+Encryption
+
+Adding SSL (HTTPS) is a great move. In the data world, this is like putting our data pipeline \
+inside an armored truck instead of a convertible car—it ensures no one can read the traffic between \
+our user and the server.
+Since we have a specific domain (nginxtest.ddns.net), we will use Let's Encrypt (via a tool called \
+Certbot) to generate the "keys" for that armored truck.
+
+Prerequisites:
+    Since we are using a laptop as main server (mainserver) and a DDNS domain (.ddns.net), we assume \
+    we are doing this in a home lab.
+        1. Port Forwarding: We must log into our home router and forward Port 80 and Port 443 to our \
+        mainserver's IP address.
+        2. Public IP: The domain nginxtest.ddns.net must point to our current public internet IP.
+    If these aren't set, Let's Encrypt will fail because it cannot "call" your server to verify you \
+    own the domain.
+
+Step 1: Install Certbot
+    We need to install the software that talks to Let's Encrypt. On our mainserver machine:
+        - sudo apt update
+        - sudo apt install certbot python3-certbot-nginx -y
+
+Step 2: Get the Certificates
+    We will ask Certbot to just get the files (the certificate and the key) but not touch oyr Nginx \
+    configuration file yet, because we want to add the configuration manually.
+    Run this command:
+        - sudo certbot certonly --standalone -d nginxtest.ddns.net
+    (Note: We might need to stop Nginx briefly with sudo systemctl stop nginx before running this, as \
+    --standalone needs port 80 free. After we get the success message, start Nginx again).
+    If successful, it will say "Congratulations!" and tell you the files are saved in \
+    /etc/letsencrypt/live/nginxtest.ddns.net/.
+
+Step 3: Update Nginx Configuration
+    Now we will edit your file to look exactly how a secure Load Balancer should look.
+    Open the file:
+        sudo nano /etc/nginx/conf.d/load-balancer.conf
+    Delete the old server { ... } block and replace it with these two blocks (one for redirecting \
+    HTTP to HTTPS, and one for the actual secure connection):
+        upstream my_app_servers {
+            server 192.168.1.10:8080 weight=1;
+            server 192.168.1.11:8080 weight=2;
+            server 192.168.1.12:8080 weight=2;
+        }
+
+        # Block 1: Catch standard HTTP (Port 80) and force it to HTTPS
+        server {
+            listen 80;
+            server_name nginxtest.ddns.net;
+            return 301 https://$host$request_uri;
+        }
+
+        # Block 2: The Secure HTTPS Server (Port 443)
+        server {
+            # 1. This is the line you asked about
+            listen 443 ssl http2;
+            server_name nginxtest.ddns.net;
+
+            # 2. The Certificate Files (The IDs)
+            ssl_certificate /etc/letsencrypt/live/nginxtest.ddns.net/fullchain.pem;
+            ssl_certificate_key /etc/letsencrypt/live/nginxtest.ddns.net/privkey.pem;
+
+            # 3. Security Protocol
+            ssl_protocols TLSv1.3;
+
+            location / {
+                proxy_pass http://my_app_servers;
+                proxy_set_header Connection "close";
+                
+                # We should tell the app it's coming from HTTPS
+                proxy_set_header X-Forwarded-Proto $scheme;
+            }
+        }
+
+    Save and exit (Ctrl+O, Enter, Ctrl+X), then restart Nginx:
+        - sudo systemctl restart nginx
+
+    Explanation of the Code:
+        1. listen 443 ssl http2;
+            - 443: This is the standard "channel" (port) for secure web traffic. Port 80 is for \
+            insecure text; 443 is for encrypted data.
+            - ssl: This is the switch that tells Nginx: "Expect encrypted data here. Do not speak \
+            plain text."
+            - http2: This is a performance upgrade. Old HTTP loads images one by one. HTTP/2 allows \
+            the browser to download many things at once over a single connection. It is much faster \
+            for modern apps.
+
+        2. ssl_certificate .../fullchain.pem;
+            - This is our Public ID Card. When a user connects, your server sends this file to them. \
+            It says: "Hi, I am nginxtest.ddns.net, and this ID is signed by Let's Encrypt." The \
+            "fullchain" means it includes your ID plus the ID of the authority who stamped it.
+
+        3. ssl_certificate_key .../privkey.pem;
+            - This is your Private Password. This file is Top Secret. It never leaves your server. \
+            It is used to decrypt the messages that users send to you (which they encrypted using \
+            your Public ID Card). If someone steals this file, they can impersonate your server.
+
+        4. ssl_protocols TLSv1.3;
+            - This defines the Language Version.
+            - Older versions (SSLv3, TLS 1.0, TLS 1.1) have math flaws that hackers can break.
+            - TLS 1.3 is the newest, fastest, and most secure version. It removes old, weak encryption \
+            methods. By setting this, you are telling Nginx: "Only talk to browsers that know how to be \
+            secure. Do not talk to ancient, insecure browsers."
+
+
+-----------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+HA (High Availability)
+
+In data engineering, we call this removing the Single Point of Failure. Right now, if our mainserver \
+crashes, the whole system stops.
+To fix this, we will use a tool called Keepalived.
+
+The Concept: The "Floating IP" (VIP)
+    Imagine a "Manager Badge" that gives the authority to handle traffic.
+        1. We create a Virtual IP (VIP). Let's say 192.168.1.100.
+        2. Normally, mainserver holds this badge (IP).
+        3. If mainserver dies, backupserver instantly grabs the badge.
+        4. Crucially: Our home router sends traffic only to this Floating IP (192.168.1.100), \
+        not to the specific laptops.
+
+Step 1: Prepare the Backup Lenovo (backupserver)
+    Our backup needs to be an exact clone of the master regarding Nginx.
+        1. Install Nginx:
+            - sudo apt update
+            - sudo apt install nginx -y
+        
+        2. Copy the Configuration: Copy the contents of /etc/nginx/conf.d/load-balancer.conf \
+        from mainserver to backupserver.
+
+        3. Copy the SSL Certificates: Since we are using HTTPS, backupserver needs the "keys" \
+        to the armored truck.
+            - The easy way: Manually copy the entire /etc/letsencrypt folder from mainserver to \
+            backupserver (using a USB stick or scp).
+            - Note: In the future, every time the certificate renews (every 90 days) on mainserver, \
+            you must copy it to backupserver again.
+
+Step 2: Install Keepalived
+    Do this on BOTH Lenovo laptops.
+    Open your terminal and run:
+        - sudo apt install keepalived -y
+
+Step 3: Configure the MASTER (mainserver)
+    We need to tell this server: "You are the Boss. Hold the IP."
+    Find our network interface name (usually eth0, wlan0, or enp3s0) by running ip a. Let's assume \
+    it is eth0 (since it's a server).
+    Create the config file:
+        - sudo nano /etc/keepalived/keepalived.conf
+    Paste this (Change interface to match ours):
+        vrrp_instance VI_1 {
+            state MASTER           # I am the Boss
+            interface eth0        # My network card name (CHECK THIS!)
+            virtual_router_id 51   # A unique ID for this group
+            priority 101           # Higher number wins (101 > 100)
+            advert_int 1           # Check for life every 1 second
+
+            authentication {
+                auth_type PASS
+                auth_pass 1111     # Simple password between laptops
+            }
+
+            virtual_ipaddress {
+                192.168.1.100      # The Floating VIP (Must be free in your network)
+            }
+        }
+
+    Start it:
+        - sudo systemctl start keepalived
+
+Step 4: Configure the BACKUP (backupserver)
+    We tell this server: "You are the Assistant. If the Boss is gone, take over."
+    Create the config file:
+    - sudo nano /etc/keepalived/keepalived.conf
+    Paste this (Notice the differences: BACKUP and priority 100):
+        vrrp_instance VI_1 {
+            state BACKUP           # I am the Assistant
+            interface eth0        # My network card name (CHECK THIS!)
+            virtual_router_id 51   # Must match the Master
+            priority 100           # Lower number (I lose if Master is alive)
+            advert_int 1
+
+            authentication {
+                auth_type PASS
+                auth_pass 1111
+            }
+
+            virtual_ipaddress {
+                192.168.1.100      # Same VIP
+            }
+        }
+
+    Start it:
+        - sudo systemctl start keepalived
+
+Step 5: The Critical Router Change
+    This is where many people fail.
+    Right now, our home router forwards Port 80/443 to mainserver's real IP (e.g., 192.168.1.5). We \
+    must log into our router and change the Port Forwarding rule to point to the Virtual IP (192.168.1.100).
+    Now, the traffic goes: Internet -> Router -> VIP -> Whichever mainserver is holding the VIP.
+
+Step 6: Test the "Failover"
+    Open our browser and go to https://nginxtest.ddns.net. It works.
+    On mainserver, shut down Keepalived (simulating a crash):
+        - sudo systemctl stop keepalived
+    Wait 2 seconds. Refresh your browser.
+    It should still work! backupserver has secretly taken the VIP.
+    Start mainserver again (sudo systemctl start keepalived). It will automatically take the VIP back \
+    because it has higher priority (101).
