@@ -1,0 +1,44 @@
+Step 1: Download the RPM Files (On a computer with Internet)
+  You need to grab the installation files (.rpm files). You can do this from any computer \
+  (Windows, Mac, or Linux) by visiting the official Docker repository for CentOS (which is \
+  compatible with Rocky Linux).
+  Go to this URL in your browser: https://download.docker.com/linux/centos/9/x86_64/stable/Packages/ \
+  (Note: If you are on Rocky Linux 8, change the /9/ in the URL to /8/).
+
+  Download the latest versions of these 5 specific files:
+    containerd.io
+    docker-ce
+    docker-ce-cli
+    docker-buildx-plugin
+    docker-compose-plugin
+
+  Tip: Keep these files in a single folder named docker-install so they are easy to move.
+
+Step 2: Transfer the Files
+  Move that docker-install folder to your offline Rocky Linux server. You might use a USB drive, \
+  or if you have a local network (LAN) connection, you can use scp (Secure Copy).
+
+Step 3: Install Docker (On the Offline Machine)
+  Now, log in to your Rocky Linux server and navigate to the folder where you put the files.
+
+  1. Go to the directory:
+    - cd /path/to/your/docker-install
+  2. Install the packages: Instead of using dnf install package_name (which tries to go online), we \
+    tell dnf to install the files sitting right there in the folder.
+    - sudo dnf install ./*.rpm
+    (The ./*.rpm part tells the system: "Install every file ending in .rpm found in this current folder.")
+  
+  Troubleshooting Dependencies: If the installation fails saying you are missing dependencies (like \
+  fuse-overlayfs or iptables), you will need to find those specific .rpm files online (using a site \
+  like pkgs.org or the Rocky Linux ISO), download them, add them to your folder, and run the install \
+  command again.
+
+Step 4: Start Docker
+  Once the installation finishes successfully, you need to turn Docker on.
+
+  1. Start the service:
+    - sudo systemctl start docker
+  2. Enable it (so it starts automatically after reboot):
+    - sudo systemctl enable docker
+  3. Verify it works:
+    - sudo docker --version
