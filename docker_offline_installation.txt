@@ -42,3 +42,23 @@ Step 4: Start Docker
     - sudo systemctl enable docker
   3. Verify it works:
     - sudo docker --version
+
+Step 5: Changing Docker images repository:
+  1. add the Arvan cloud repository to your Docker service using the following command:
+    - sudo bash -c 'cat > /etc/docker/daemon.json <<EOF
+      {
+        "insecure-registries" : ["https://docker.arvancloud.ir"],
+        "registry-mirrors": ["https://docker.arvancloud.ir"]
+      }
+      EOF'
+
+  2. Then enter the following commands to apply these changes:
+    - docker logout
+    - sudo systemctl restart docker
+  
+  3. Now you can access the Docker images without renaming them using the following command:
+    - docker pull <ImageName>
+  
+  4. To use the Arvan cloud repository without making any changes to your Docker service, \
+  you can use the following command:
+    - docker pull docker.arvancloud.ir/<ImageName>
