@@ -162,5 +162,28 @@ Phase 6: How to change Maven repository:
         </mirror>
       </mirrors>
     </settings>
+    or:
+    <settings>
+      <profiles>
+        <profile>
+          <id>standard-repos</id>
+          <repositories>
+            <repository>
+              <id>google-maven-central</id>
+              <name>Google Maven Central</name>
+              <url>https://maven-central.storage-googleapis.com/repos/central/data/</url>
+            </repository>
+            <repository>
+              <id>confluent</id>
+              <name>Confluent</name>
+              <url>https://packages.confluent.io/maven/</url>
+            </repository>
+          </repositories>
+        </profile>
+      </profiles>
+      <activeProfiles>
+        <activeProfile>standard-repos</activeProfile>
+      </activeProfiles>
+    </settings>
   3. Save and Exit: (Esc -> :wq -> Enter).
   
