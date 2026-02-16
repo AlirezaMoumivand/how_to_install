@@ -208,5 +208,60 @@ Phase 6: How to change Maven repository:
         <activeProfile>standard-repos</activeProfile>
       </activeProfiles>
     </settings>
+    or all together:
+    <settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0
+                          http://maven.apache.org/xsd/settings-1.0.0.xsd">
+
+      <localRepository>/root/.m2/repository</localRepository>
+
+      <mirrors>
+      </mirrors>
+
+      <profiles>
+        <profile>
+          <id>combined-repos</id>
+          <repositories>
+            
+            <repository>
+              <id>central</id>
+              <name>Maven Central</name>
+              <url>https://repo1.maven.org/maven2</url>
+              <releases><enabled>true</enabled></releases>
+              <snapshots><enabled>false</enabled></snapshots>
+            </repository>
+
+            <repository>
+              <id>confluent</id>
+              <name>Confluent</name>
+              <url>https://packages.confluent.io/maven/</url>
+              <releases><enabled>true</enabled></releases>
+              <snapshots><enabled>false</enabled></snapshots>
+            </repository>
+
+            <repository>
+              <id>aliyun</id>
+              <name>Aliyun Public</name>
+              <url>https://maven.aliyun.com/repository/public</url>
+              <releases><enabled>true</enabled></releases>
+              <snapshots><enabled>false</enabled></snapshots>
+            </repository>
+
+          </repositories>
+
+          <pluginRepositories>
+            <pluginRepository>
+              <id>central</id>
+              <url>https://repo1.maven.org/maven2</url>
+            </pluginRepository>
+          </pluginRepositories>
+        </profile>
+      </profiles>
+
+      <activeProfiles>
+        <activeProfile>combined-repos</activeProfile>
+      </activeProfiles>
+    </settings>
   3. Save and Exit: (Esc -> :wq -> Enter).
   
