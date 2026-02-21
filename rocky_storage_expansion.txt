@@ -1,0 +1,54 @@
+This documentation covers the critical "Catch-22" scenario where a 100% full disk prevents the 
+installation of recovery tools and crashes the network. This guide uses built-in tools like fdisk 
+and lvextend to recover the system on NVMe storage.
+
+The Scenario
+Your disk is at 100% capacity. This has caused:
+  - NetworkManager to crash (it cannot write temporary state files).
+  - DNF/Yum to fail (no space to download packages like growpart).
+  - SSH/Termius to fail (cannot open a session channel).
+
+Step 1: Emergency Space Cleanup
+  We must delete "gunk" to get a few megabytes of working room for system commands.
+    - # Clear the DNF cache
+    - dnf clean all
+    - # Delete old logs older than 1 day
+    - journalctl --vacuum-time=1d
+
+Step 2: Expand Partition without growpart
+  We will use fdisk to manually recreate the partition table. Note: This is safe as long as the 
+  "First Sector" remains the same.
+    1. Run fdisk: fdisk /dev/nvme0n1
+    2. Print Table: Type p to identify your LVM partition (usually partition 2).
+    3. Delete Entry: Type d then 2 (this removes the pointer, not the data).
+    4. Create New: Type n, then p, then 2.
+    5. Boundaries: Press Enter for default first sector and Enter for default last sector (to use the full 50GB).
+    6. The Signature Check: > CRITICAL: If it asks "Do you want to remove the LVM2_member signature?", type N (No).
+    7. Set Type: Type t, then 2, then enter 8e (Linux LVM).
+    8. Save: Type w to write changes and exit.
+
+Step 3: Resolve LVM "Duplicate Devices" Warning
+  In Rocky Linux 9, LVM uses a devices file that might get confused by the changed partition size.
+    1. Tell LVM to use the new partition:
+      - lvmdevices --adddev /dev/nvme0n1p2
+    2. Confirm Duplicate: If prompted "Add device with duplicate PV to devices file?", type y and press Enter.
+
+Step 4: Grow the LVM and File System
+  Now that the partition (the container) is larger, tell the LVM software and the XFS filesystem to stretch into it.
+    - # Refresh the kernel's view of the disk
+    - partprobe /dev/nvme0n1
+    - # Resize the Physical Volume
+    - pvresize /dev/nvme0n1p2
+    - # Extend the Logical Volume AND the File System at once (-r is the magic flag)
+    - lvextend -r -l +100%FREE /dev/mapper/rl-root
+
+Step 5: Restore Network & Verification
+  With free space available, the system services can now function.
+    - # Start the network
+    - systemctl start NetworkManager
+    - nmcli connection up ens160
+    - # Verify disk space
+    - df -h
+  Troubleshooting Termius: "Cannot open channel"
+  If you could authenticate but not open a terminal, it was because SSH couldn't write to /var/log/wtmp. Once Step 4 is
+  complete, your Termius session will connect immediately.
