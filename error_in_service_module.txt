@@ -1,0 +1,52 @@
+Error in service module Fix. (See figure error_in_service_module.png)
+
+Why Did This Happen?
+  This is entirely Ambari's fault, not yours.
+  If we look back at your previous Ambari log, right before the installation crashed, Ambari successfully completed this step: \
+  Writing File['/etc/security/limits.d/hdfs.conf']
+  Ambari generated a file to increase the file limits for the hdfs user. However, something in Ambari's template was formatted \
+  incorrectly (likely a missing parameter or a syntax error).
+  When you type your password on the login screen, Linux uses a security module called PAM to check your credentials and assign \
+  your user limits. PAM reads all the files inside /etc/security/limits.d/. Because Ambari placed a broken hdfs.conf file in there, \
+  the PAM module crashes while reading it, throws the "Error in service module" message, and abruptly hangs up the login process.
+
+How to Break Back In
+  Since the login screen is blocked, we have to bypass it using VMware's boot menu. It feels like hacking into your own server, but it \
+  is the standard way to fix broken configuration files!
+
+  Step 1: Check your SSH windows first (The "Lucky" Check)
+    If you still have an SSH terminal (like PuTTY or MobaXterm) currently open and connected to rocky-master from earlier, you might still \
+    be able to type commands!
+    If it works, simply run: sudo rm -f /etc/security/limits.d/hdfs.conf and you are instantly fixed!
+    If it is frozen or closed, proceed to Step 2.
+
+  Step 2: Boot into Rescue Mode
+    If you are completely locked out, we will use your VMware console to delete the file before the login screen even loads.
+      1. Click into your VMware RockyMaster console and restart the VM (you can use the VMware reset button at the top).
+      2. As soon as the VM starts turning back on, click inside the screen and press the Up/Down Arrow keys repeatedly. This will stop the \
+      boot process and show you the GRUB boot menu (a black screen with a few Rocky Linux options).
+      3. Use the arrow keys to highlight the top Rocky Linux option, and press the letter e on your keyboard to edit the boot instructions.
+      4. Use your arrow keys to scroll down to the line that starts with the word linux (it is a very long line that might wrap to the next line).
+      5. Move your cursor to the very end of that linux line, press Space, and type: rd.break
+      6. Press Ctrl + X to start the server.
+
+  Step 3: Delete the Broken File
+    The server will boot into a very basic, password-less root prompt (switch_root:/#). Now we can safely remove the broken file. Type these exact commands one by one and press Enter:
+    - Mount your hard drive so we can edit files:
+        mount -o remount,rw /sysroot
+    - Step inside your actual operating system:
+        chroot /sysroot
+    - Delete the broken Ambari file:
+        rm -f /etc/security/limits.d/hdfs.conf
+        rm -f /etc/security/limits.d/yarn.conf
+        rm -f /etc/security/limits.d/mapred.conf
+        rm -f /etc/security/limits.d/zookeeper.conf
+    - When we change files in rescue mode, SELinux sometimes blocks the login screen because the "security tags" on the folders don't match. \
+    This command tells Rocky Linux to automatically fix all its security tags on the next boot:
+        touch /.autorelabel
+    - Exit the system:
+        exit
+    - Exit the rescue prompt (this will resume a normal reboot):
+        exit
+    (Note: Because of the .autorelabel command, the reboot will take a few extra minutes. You might see a message saying "Warning: SELinux targeted \
+    policy relabel is required." Let it finish; it will reboot one more time on its own when it's done.)
