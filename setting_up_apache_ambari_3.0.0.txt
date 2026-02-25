@@ -1,0 +1,163 @@
+Phase 1: Downloading and Setting Up the Repository
+  First, we need to download the Apache Ambari and Bigtop packages and set up a local repository so your \
+  machines can access the installation files.
+  1. Create a Local Repository Directory
+    Install the tool we need to create the repository and set up the folder structure:
+      - sudo dnf install createrepo
+      - sudo mkdir -p /var/www/html/ambari-repo
+      - sudo chmod -R 755 /var/www/html/ambari-repo
+      - cd /var/www/html/ambari-repo
+  2. Download the Packages
+    Depending on your operating system, run the following commands to download the packages.
+    For Rocky Linux 9:
+      - wget -r -np -nH --cut-dirs=4 --reject 'index.html*' https://www.apache-ambari.com/dist/ambari/3.0.0/rocky9/
+      - wget -r -np -nH --cut-dirs=4 --reject 'index.html*' https://www.apache-ambari.com/dist/bigtop/3.3.0/rocky9/
+  3. Generate Repository Metadata
+    - sudo createrepo .
+  4. Expose the Repository Using Nginx
+    To let other machines access this repository over the network, we can set up a simple Nginx web server:
+      - sudo dnf install nginx
+      - sudo tee /etc/nginx/conf.d/ambari-repo.conf << EOF
+        server {
+            listen 80;
+            server_name _;
+            root /var/www/html/ambari-repo;
+            autoindex on;
+            location / {
+                try_files \$uri \$uri/ =404;
+            }
+        }
+        EOF
+      - sudo systemctl start nginx
+      - sudo systemctl enable nginx
+  5. Configure the Repo File on All Machines
+    On every machine that will be part of your cluster, add this repository configuration (make sure to replace \
+    your-server-ip with the IP of the machine hosting the repository):
+      - sudo tee /etc/yum.repos.d/ambari.repo << EOF
+        [ambari]
+        name=Ambari Repository
+        baseurl=http://your-server-ip/ambari-repo
+        gpgcheck=0
+        enabled=1
+        EOF
+
+      - sudo dnf clean all
+      - sudo dnf makecache
+
+Phase 2: Environment Setup (Bare Metal & KVM)
+  You will need at least 3 machines (1 for the Ambari Server, and 2 or more as Agents).
+  1. Configure Networking and Hostnames
+    Ensure all machines have unique, fully qualified domain names (FQDNs). Edit the /etc/hosts file on every single \
+    machine to include the IP addresses and hostnames of all the nodes in the cluster. This allows them to communicate \
+    perfectly by name.
+  2. Configure Security
+    To avoid permission and communication issues during installation, it is best to disable SELinux and the firewall \
+    (especially in development environments). Run these commands on all machines:
+      - # Disable SELinux
+      - sudo setenforce 0
+      - sudo sed -i 's/SELINUX=enforcing/SELINUX=disabled/g' /etc/selinux/config
+      - # Disable Firewall
+      - sudo systemctl disable firewalld
+      - sudo systemctl stop firewalld
+  3. Configure Passwordless SSH
+    Your Ambari Server needs to be able to talk to the agent machines without asking for a password. From your Ambari \
+    Server, generate an SSH key and copy it to all your agent machines:
+      - # Generate key (on the Server machine)
+      - sudo su -
+      - ssh-keygen -t rsa -N "" -f ~/.ssh/id_rsa
+      - # Copy to agents
+      - ssh-copy-id -o StrictHostKeyChecking=no root@agent-machine1-hostname
+      - ssh-copy-id -o StrictHostKeyChecking=no root@agent-machine2-hostname
+    Note: Make sure PasswordAuthentication yes and PermitRootLogin yes are set in your /etc/ssh/sshd_config file across \
+    all machines, then restart the sshd service if you made changes.
+  4. Install Required Packages and Java
+    Run these updates and installations on all machines:
+      - dnf update -y
+      - dnf install -y sudo openssh-server openssh-clients which iproute net-tools less vim-enhanced wget curl tar unzip git java-1.8.0-openjdk-devel chrony
+    Also, ensure the Rocky-Devel repository is enabled. Open /etc/yum.repos.d/Rocky-Devel.repo and make sure it says enabled=1.
+  5. Synchronize Time
+    Start and enable the NTP service on all nodes to keep their clocks in sync:
+      - systemctl start chronyd
+      - systemctl enable chronyd
+  
+Phase 3: Ambari Installation and Configuration
+  1. Install Ambari Packages
+    On all machines (server and agents), install the necessary dependencies and the Ambari agent:
+      - yum install -y python3-distro java-17-openjdk-devel java-1.8.0-openjdk-devel ambari-agent
+    On your designated Ambari Server machine only, install the server package:
+      - yum install -y python3-psycopg2 ambari-server
+  2. Database Setup
+    You can choose to use either PostgreSQL or MySQL. Here are the steps for both so you can pick the one you prefer.
+    Option A: PostgreSQL Setup (On the Server)
+      - yum install -y postgresql
+      - /usr/bin/postgresql-setup --initdb
+      - # Allow remote connections
+      - sed -i "s/#listen_addresses = 'localhost'/listen_addresses = '*'/" /var/lib/pgsql/data/postgresql.conf
+      - # Add authentication rules
+      - cat >> /var/lib/pgsql/data/pg_hba.conf << EOF
+        host ambari ambari 0.0.0.0/0 md5
+        host hive hive 0.0.0.0/0 md5
+        host ranger ranger 0.0.0.0/0 md5
+        host rangerkms rangerkms 0.0.0.0/0 md5
+        EOF
+      - # Create users and database as postgres user
+      - CREATE ROLE "ambari" LOGIN PASSWORD 'admin' NOINHERIT;
+      - CREATE DATABASE ambari;
+      - GRANT ALL PRIVILEGES ON DATABASE ambari TO ambari;
+      - # Import the schema
+      - PGPASSWORD='admin' psql -h localhost -p 5432 -U ambari -d ambari -f /var/lib/ambari-server/resources/Ambari-DDL-Postgres-CREATE.sql
+    Option B: MySQL Setup (On the Server)
+      - yum -y install https://dev.mysql.com/get/mysql80-community-release-el8-1.noarch.rpm
+      - yum -y install mysql-server
+      - systemctl start mysqld.service
+      - systemctl enable mysqld.service
+      - # Create the user and databases inside MySQL shell
+      - CREATE USER 'ambari'@'localhost' IDENTIFIED BY 'ambari';
+      - GRANT ALL PRIVILEGES ON *.* TO 'ambari'@'localhost';
+      - CREATE USER 'ambari'@'%' IDENTIFIED BY 'ambari';
+      - GRANT ALL PRIVILEGES ON *.* TO 'ambari'@'%';
+      - CREATE DATABASE ambari CHARACTER SET utf8 COLLATE utf8_general_ci;
+      - FLUSH PRIVILEGES;
+      - # Import the schema
+      - mysql -uambari -pambari ambari < /var/lib/ambari-server/resources/Ambari-DDL-MySQL-CREATE.sql
+    
+  3. Configure Ambari Server
+    Now, let's tie the server to the database. Run the setup command on your Ambari Server.
+    If using PostgreSQL:
+      - ambari-server setup --jdbc-db=postgres --jdbc-driver=/usr/share/java/postgresql-42.7.3.jar
+      - ambari-server setup -s \
+          -j /usr/lib/jvm/java-1.8.0-openjdk \
+          --ambari-java-home /usr/lib/jvm/java-17-openjdk \
+          --database=postgres \
+          --databasehost=localhost \
+          --databaseport=5432 \
+          --databasename=ambari \
+          --databaseusername=ambari \
+          --databasepassword=admin
+    If using MySQL:
+      - wget https://repo1.maven.org/maven2/mysql/mysql-connector-java/8.0.28/mysql-connector-java-8.0.28.jar -O /usr/share/java/mysql-connector-java.jar
+      - ambari-server setup --jdbc-db=mysql --jdbc-driver=/usr/share/java/mysql-connector-java.jar
+      - echo "server.jdbc.url=jdbc:mysql://localhost:3306/ambari?useSSL=true&verifyServerCertificate=false&enabledTLSProtocols=TLSv1.2" >> /etc/ambari-server/conf/ambari.properties
+      - ambari-server setup -s \
+          -j /usr/lib/jvm/java-1.8.0-openjdk \
+          --ambari-java-home /usr/lib/jvm/java-17-openjdk \
+          --database=mysql \
+          --databasehost=localhost \
+          --databaseport=3306 \
+          --databasename=ambari \
+          --databaseusername=ambari \
+          --databasepassword=ambari
+  
+  4. Start the Services
+    Start the Ambari Server:
+      - ambari-server start
+    Next, on all agent machines, point the agent to the server by editing its configuration file:
+      - sed -i "s/hostname=.*/hostname=your_ambari_server_hostname/" /etc/ambari-agent/conf/ambari-agent.ini
+      - ambari-agent start
+  
+  5. Access the Web Interface
+    Congratulations! Once everything is started, open your web browser and navigate to:
+      - http://your_ambari_server_hostname:8080
+    You can log in using the default credentials:
+      Username: admin
+      Password: admin
