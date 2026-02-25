@@ -1,0 +1,244 @@
+The plan for the document structure:
+  - Phase 1: Ambari Server Configuration & Stack Setup
+  - Phase 2: Global Package Pre-Installation
+  - Phase 3: Ambari Blueprint Corrections (Fixing the strict version naming bug).
+  - Phase 4: The Bigtop Folder Bridge (Creating the necessary symlinks for distro-select).
+  - Phase 5: Component-Specific Configurations (Fixing the Hive metrics bug and database connectors).
+  - Phase 6: The PAM Lockout Rescue Guide (How to recover a node if the security module crashes).
+
+Bigtop Cluster Deployment via Ambari: Standard Operating Procedure
+
+Phase 1: Ambari Server Configuration & Stack Setup
+  To successfully add a new Bigtop version to your Ambari server, you must update the backend files on the server itself, \
+  and then provide the correct configuration in the Ambari web interface.
+  1. Create the New Stack Directory
+    First, create a safe copy of your current 3.3.0 settings to act as a foundation for 3.4.0. Run this on your Ambari server:
+      - cd /var/lib/ambari-server/resources/stacks/BIGTOP/
+      - sudo cp -r 3.3.0 3.4.0
+  2. Update Stack Inheritance
+    Tell Ambari that the new 3.4.0 folder exists and that it should inherit any missing information from the 3.3.0 folder. \
+    Open /var/lib/ambari-server/resources/stacks/BIGTOP/3.4.0/metainfo.xml and update it to look like this:
+      <?xml version="1.0"?>
+      <metainfo>
+          <versions>
+              <active>true</active>
+          </versions>
+          <extends>3.3.0</extends>
+      </metainfo> 
+  3. Update the Version for Each Service
+    Because Bigtop 3.4 uses newer software, you must update the version number inside every service's configuration file.
+    Navigate to the services folder in your new stack:
+      - cd /var/lib/ambari-server/resources/stacks/BIGTOP/3.4.0/services/
+    Inside this folder, open the metainfo.xml file for each service you plan to use (e.g., vi ZOOKEEPER/metainfo.xml). \
+    Find the <version> tag and change it to the new version.
+    Reference List for Bigtop 3.4 Component Versions:
+      - HDFS / YARN / MAPREDUCE2: 3.3.6
+      - ZOOKEEPER: 3.8.4
+      - SPARK: 3.5.3
+      - HIVE: 4.0.1
+      - HBASE: 2.6.1
+      - KAFKA: 3.4.1
+      - FLINK: 1.20.0
+  4. Configure Local Repositories
+    Point the stack to your specific Rocky 9 repository. Open 3.4.0/repos/repoinfo.xml and make sure the redhat9 section looks like this:
+      <reposinfo>
+        <os family="redhat9">
+          <repo>
+            <baseurl>https://nexus.son.ir/repository/rocky-bgpt-hosted-yum/rocky9/3.4.0/x86_64</baseurl>
+            <repoid>BIGTOP-3.4.0</repoid>
+            <reponame>Bigtop-3.4</reponame>
+          </repo>
+        </os>
+      </reposinfo>
+  5. Configure SSH Access
+    To prevent libcrypto and Permission denied errors during installation, convert your SSH key to the classic RSA \
+    format (press Enter if it asks for a passphrase):
+      - ssh-keygen -p -m PEM -f ~/.ssh/id_rsa
+    Share the Public Key to allow password-less access to your nodes:
+      - ssh-copy-id -i ~/.ssh/id_rsa.pub root@rocky-master
+      - ssh-copy-id -i ~/.ssh/id_rsa.pub root@rocky-node1
+      - ssh-copy-id -i ~/.ssh/id_rsa.pub root@rocky-node2
+  6. The Version Definition File (VDF)
+    Save the following XML exactly as it is into a file named bigtop-3.4.0.xml on your local computer. (Ensure the \
+    versions match what you set in Step 3).
+      <?xml version="1.0" encoding="UTF-8"?>
+      <repository-version xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="version_definition.xsd">
+        <release>
+          <type>STANDARD</type>
+          <stack-id>BIGTOP-3.4</stack-id>
+          <version>3.4.0.0</version>
+          <release-notes>Bigtop 3.4.0 for EL9</release-notes>
+          <display>Bigtop-3.4.0.0</display>
+        </release>
+
+        <manifest>
+          <service id="HDFS" name="HDFS" version="3.3.6" />
+          <service id="ZOOKEEPER" name="ZOOKEEPER" version="3.8.4" />
+          <service id="SPARK" name="SPARK" version="3.5.3" />
+          <service id="HIVE" name="HIVE" version="4.0.1" />
+        </manifest>
+
+        <available-services>
+          <service name="HDFS" version="3.3.6" />
+          <service name="ZOOKEEPER" version="3.8.4" />
+          <service name="SPARK" version="3.5.3" />
+          <service name="HIVE" version="4.0.1" />
+        </available-services>
+
+        <repositories>
+          <os family="redhat9">
+            <repo>
+              <repoid>BIGTOP-3.4.0</repoid>
+              <reponame>Bigtop</reponame>
+              <baseurl>https://nexus.son.ir/repository/rocky-bgpt-hosted-yum/rocky9/3.4.0/x86_64</baseurl>
+            </repo>
+          </os>
+        </repositories>
+      </repository-version>
+
+Phase 2: Global Package Pre-Installation
+  During a massive cluster deployment, Rocky Linux's package manager (dnf/yum) can sometimes corrupt its download cache \
+  or trigger Ambari's 30-minute task timeout. To ensure a flawless installation wizard experience, all core packages must \
+  be pre-installed manually across the cluster.
+  1. Clear the Package Cache
+    Execute the following commands on ALL nodes (rocky-master, rocky-node1, rocky-node2) to force the operating system to completely \
+    empty its download folders and prevent "File not found" errors:
+      - sudo yum clean all
+      - sudo rm -rf /var/cache/dnf/*
+  2. Install Core Bigtop Packages
+    Run the master installation command on ALL nodes. Pre-installing ensures that when Ambari requests these packages, the system \
+    instantly verifies their presence and proceeds to the configuration phase without network timeouts.
+      - sudo yum install -y \
+          zookeeper \
+          hadoop hadoop-hdfs hadoop-yarn hadoop-mapreduce hadoop-client \
+          hive hive-hcatalog hive-webhcat \
+          tez \
+          hbase \
+          spark \
+          zeppelin \
+          solr ambari-infra-solr ambari-infra-solr-client \
+          ambari-metrics-collector ambari-metrics-monitor ambari-metrics-hadoop-sink \
+          ranger-admin ranger-usersync ranger-kms ranger-hdfs-plugin ranger-yarn-plugin ranger-hive-plugin
+
+Phase 3: Ambari Blueprint Corrections (The Naming Bug)
+  By default, Ambari's service blueprints are hardcoded to look for strictly versioned package names (e.g., hive_3_4_0 or tez_3_4_0). \
+  However, standard Bigtop distributions compile these packages without the version suffix (e.g., hive).
+  To prevent "No package found" execution failures during the installation wizard, we must strip the _${stack_version} variable from \
+  Ambari's metadata files.
+  1. Execute the Global Sweep
+    Run this command on the Master Node only (rocky-master). It recursively searches through every service folder and removes the \
+    problematic version suffix constraint:
+      - sudo find /var/lib/ambari-server/resources/stacks/BIGTOP/3.2.0/services -name metainfo.xml -exec sed -i 's/_${stack_version}//g' {} +
+  2. Clear Agent Memory and Restart Management Services
+    To force the worker agents to forget their cached (and broken) blueprints, clear the cache directory and restart all Ambari services.
+      - On rocky-master:
+          - sudo ambari-server restart
+      - On ALL nodes (rocky-master, rocky-node1, rocky-node2):
+          - sudo rm -rf /var/lib/ambari-agent/cache/*
+          - sudo ambari-agent restart
+
+Phase 4: The Bigtop Folder Bridge (Directory Mapping)
+  Ambari’s automated distro-select scripts expect cluster components to reside inside strictly versioned directories \
+  (e.g., /usr/bigtop/3.4.0/usr/lib/). Additionally, it uses a /usr/bigtop/current/ directory to manage active component \
+  roles. Because standard Bigtop compilations install packages directly into the root /usr/lib/ folder, Ambari will throw \
+  "No such file or directory" errors when attempting to configure or link them.
+  To resolve this, we must build a "folder bridge" using forced symbolic links (-sfn) to prevent nested link traps.
+  1. Create the Base Directory Structure
+    Run the following commands on ALL nodes to build the foundational folders:
+      - sudo mkdir -p /usr/bigtop/3.4.0/usr/lib 
+      - sudo mkdir -p /usr/bigtop/current
+      - sudo mkdir -p /usr/lib/hive/lib 
+      - sudo mkdir -p /usr/lib/spark/jars
+  2. Build the Version Bridge
+    Run this block on ALL nodes to map the actual installation paths to Ambari's expected versioned paths. \
+    This ensures distro-select runs flawlessly:
+      - sudo ln -sfn /usr/lib/hadoop /usr/bigtop/3.4.0/usr/lib/hadoop
+      - sudo ln -sfn /usr/lib/hadoop-hdfs /usr/bigtop/3.4.0/usr/lib/hadoop-hdfs
+      - sudo ln -sfn /usr/lib/hadoop-yarn /usr/bigtop/3.4.0/usr/lib/hadoop-yarn
+      - sudo ln -sfn /usr/lib/hadoop-mapreduce /usr/bigtop/3.4.0/usr/lib/hadoop-mapreduce
+      - sudo ln -sfn /usr/lib/zookeeper /usr/bigtop/3.4.0/usr/lib/zookeeper
+      - sudo ln -sfn /usr/lib/hive /usr/bigtop/3.4.0/usr/lib/hive
+      - sudo ln -sfn /usr/lib/hive-hcatalog /usr/bigtop/3.4.0/usr/lib/hive-hcatalog
+      - sudo ln -sfn /usr/lib/tez /usr/bigtop/3.4.0/usr/lib/tez
+      - sudo ln -sfn /usr/lib/hbase /usr/bigtop/3.4.0/usr/lib/hbase
+      - sudo ln -sfn /usr/lib/spark /usr/bigtop/3.4.0/usr/lib/spark
+      - sudo ln -sfn /usr/lib/zeppelin /usr/bigtop/3.4.0/usr/lib/zeppelin
+      - sudo ln -sfn /usr/lib/solr /usr/bigtop/3.4.0/usr/lib/solr
+  3. Build the Active Role Shortcuts
+    Run this block on ALL nodes. Ambari relies on these specific current shortcuts to place database connector files \
+    (like the MySQL JDBC driver) into the correct library folders:
+      - sudo ln -sfn /usr/lib/hive /usr/bigtop/current/hive-client
+      - sudo ln -sfn /usr/lib/hive /usr/bigtop/current/hive-server2
+      - sudo ln -sfn /usr/lib/hive-hcatalog /usr/bigtop/current/hive-webhcat
+      - sudo ln -sfn /usr/lib/hbase /usr/bigtop/current/hbase-client
+      - sudo ln -sfn /usr/lib/hbase /usr/bigtop/current/hbase-master
+      - sudo ln -sfn /usr/lib/hbase /usr/bigtop/current/hbase-regionserver
+      - sudo ln -sfn /usr/lib/spark /usr/bigtop/current/spark-client
+      - sudo ln -sfn /usr/lib/spark /usr/bigtop/current/spark-historyserver
+
+Phase 5: Component-Specific Configurations & Known Bugs
+  1. Hive Metrics Boot Crash (Dropwizard Version Mismatch)
+    Symptom: The Hive Metastore fails to start, throwing a java.lang.NoSuchMethodError related to \
+    com.github.joshelser.dropwizard.metrics. This instantly shuts down the Metastore, which causes \
+    HiveServer2 to fall into an infinite "Connection refused" loop while trying to connect to port 9083.
+    Root Cause: A library version mismatch between Hadoop 3 and Bigtop's Hive compilation regarding the \
+    Java metrics reporter.
+    Resolution: Disable the internal Java metrics reporter in the Ambari UI. This bypasses the broken \
+    library and allows the services to boot normally.
+      1. Open the Ambari Dashboard and navigate to Hive > Configs.
+      2. Search for the keyword metrics.
+      3. Set hive.metastore.metrics.enabled to false.
+      4. Set hive.server2.metrics.enabled to false.
+      5. Save the configuration and restart all affected Hive components.
+  2. Hive Service Startup Sequence
+    Symptom: HiveServer2 crashes immediately upon startup on worker nodes.
+    Root Cause: HiveServer2 requires an active connection to the Hive Metastore to retrieve database metadata. If started simultaneously or out of order, HiveServer2 will fail.
+    Resolution:
+      Always start the cluster's Hive services in the following strict order:
+        1. Navigate to the Master Node (rocky-master) in the Ambari Hosts tab.
+        2. Start the Hive Metastore and wait for the component indicator to turn solid green.
+        3. Navigate to the Worker Nodes (rocky-node1, rocky-node2) and start HiveServer2.
+
+Phase 6: The PAM Lockout Rescue Guide (System Recovery)
+  1. Understanding the Lockout
+    Symptom: You are completely locked out of the operating system. Attempting to log in as root via SSH or \
+    the VMware console immediately returns the message: Error in service module and drops the connection.
+    Root Cause: During the installation phase, Ambari generates files to increase system limits for worker accounts \
+    (HDFS, YARN, etc.). Occasionally, Ambari pushes a malformed template file into the /etc/security/limits.d/ directory. \
+    When the Linux Pluggable Authentication Module (PAM) attempts to read this broken file during a login attempt, it \
+    crashes and actively blocks all access to the server.
+  2. Rescue Mode Recovery Steps
+    To bypass the broken security module and regain access to the server, you must boot the node into a special, password-less \
+    rescue environment and delete the corrupted files.
+    Step 1: Interrupt the Boot Process
+      1. Open the virtual machine console (e.g., in VMware).
+      2. Restart the VM.
+      3. As soon as the screen turns on, repeatedly press the Up/Down Arrow keys to pause the boot process at the black GRUB menu.
+    Step 2: Enter Rescue Mode (rd.break)
+      1. Ensure the top Rocky Linux boot option is highlighted.
+      2. Press the letter e on your keyboard to edit the boot instructions.
+      3. Use your arrow keys to scroll down to the long line of text that starts with the word linux.
+      4. Move your cursor to the very end of that line, press the Spacebar, and type exactly: rd.break
+      5. Press Ctrl + X to start the server. It will boot into a basic command prompt (switch_root:/#).
+    Step 3: Delete the Corrupted Files
+      Run the following commands sequentially to step into your hard drive and delete the broken Ambari configuration files:
+        - Make the hard drive writable:
+          - mount -o remount,rw /sysroot
+        - Step inside the actual operating system:
+          - chroot /sysroot
+        - Delete the broken Ambari limit files:
+          - rm -f /etc/security/limits.d/hdfs.conf
+          - rm -f /etc/security/limits.d/yarn.conf
+          - rm -f /etc/security/limits.d/mapred.conf
+          - rm -f /etc/security/limits.d/zookeeper.conf
+          - rm -f /etc/security/limits.d/hive.conf
+    Step 4: The SELinux Relabel (Crucial)
+      Because files were modified while the system was technically turned off, Rocky Linux's security guard (SELinux) will block the \
+      next login unless the security tags are reset. Run this command to force an automatic reset on boot:
+        - touch /.autorelabel
+    Step 5: Exit and Reboot
+      Type exit and press Enter to leave the chroot environment.
+      Type exit and press Enter again to resume the normal boot process.
+    
+    (Note: The server will take a few extra minutes to boot as SELinux applies the new security labels. It may automatically reboot one \
+    more time during this process. Once it reaches the standard login screen, your root access will be fully restored.)
